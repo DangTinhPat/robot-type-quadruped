@@ -1,0 +1,39 @@
+# ros_gz_bridge topic list for sim.launch.py's parameter_bridge node.
+# Each entry's gz topic name matches the <topic> set on the corresponding
+# sensor/source in description/sensors.xacro (or the world/model for /clock) -
+# check there if a gz_topic_name below stops matching.
+- ros_topic_name: "clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "imu"
+  gz_topic_name: "/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "FR_foot_contact"
+  gz_topic_name: "/FR_foot_contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "FL_foot_contact"
+  gz_topic_name: "/FL_foot_contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "RR_foot_contact"
+  gz_topic_name: "/RR_foot_contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "RL_foot_contact"
+  gz_topic_name: "/RL_foot_contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS

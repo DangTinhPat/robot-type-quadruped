@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!-- Top-level entry point for the go1 description: this is the file launch
+     files should xacro-process, not go1.xacro directly. Pulls together the
+     physical structure (go1.xacro) and every sensor definition
+     (sensors/*.xacro) into one robot. -->
+<robot name="go1" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find main_bot)/description/go1.xacro"/>
+
+  <xacro:include filename="$(find main_bot)/description/sensors/imu.xacro"/>
+  <xacro:include filename="$(find main_bot)/description/sensors/foot_contacts.xacro"/>
+  <xacro:include filename="$(find main_bot)/description/sensors/depth_camera_left.xacro"/>
+  <xacro:include filename="$(find main_bot)/description/sensors/body_cameras.xacro"/>
+
+</robot>

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!-- IMU sensor, mounted on imu_link (defined in go1.xacro). -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <gazebo reference="imu_link">
+    <gravity>true</gravity>
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>1000</update_rate>
+      <visualize>true</visualize>
+      <topic>imu</topic>
+      <!-- Gazebo Classic only (libgazebo_ros_imu_sensor.so). The <sensor> itself is
+           native to gz sim and publishes on gz transport; bridge to ROS with
+           ros_gz_bridge if needed. -->
+      <!-- <plugin filename="libgazebo_ros_imu_sensor.so" name="imu_plugin">
+        <topicName>trunk_imu</topicName>
+        <bodyName>imu_link</bodyName>
+        <updateRateHZ>1000.0</updateRateHZ>
+        <gaussianNoise>0.0</gaussianNoise>
+        <xyzOffset>0 0 0</xyzOffset>
+        <rpyOffset>0 0 0</rpyOffset>
+        <frameName>imu_link</frameName>
+      </plugin> -->
+      <pose>0 0 0 0 0 0</pose>
+    </sensor>
+  </gazebo>
+
+</robot>

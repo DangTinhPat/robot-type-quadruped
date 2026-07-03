@@ -1,0 +1,93 @@
+<?xml version="1.0"?>
+<!-- Foot contact sensors (x4), mounted on the *_calf links (defined in go1.xacro).
+     Each references the lumped foot collision that gets created when the fixed
+     *_foot joint is merged into its parent calf link during URDF->SDF conversion. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <gazebo reference="FR_calf">
+    <sensor name="FR_foot_contact" type="contact">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <!-- Gazebo Classic only (libunitreeFootContactPlugin.so). The <sensor type="contact">
+           itself is native to gz sim and publishes on gz transport without this plugin. -->
+      <!-- <plugin filename="libunitreeFootContactPlugin.so" name="contactPlugin"/> -->
+      <contact>
+        <collision>FR_calf_fixed_joint_lump__FR_foot_collision_1</collision>
+        <!-- The contact sensor's actual publish topic lives here, not in the
+             generic <sensor><topic> field (that one is a no-op for type="contact";
+             confirmed against sdformat's contact.sdf schema). -->
+        <topic>FR_foot_contact</topic>
+      </contact>
+    </sensor>
+  </gazebo>
+  <gazebo reference="FL_calf">
+    <sensor name="FL_foot_contact" type="contact">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <!-- Gazebo Classic only (libunitreeFootContactPlugin.so). The <sensor type="contact">
+           itself is native to gz sim and publishes on gz transport without this plugin. -->
+      <!-- <plugin filename="libunitreeFootContactPlugin.so" name="contactPlugin"/> -->
+      <contact>
+        <collision>FL_calf_fixed_joint_lump__FL_foot_collision_1</collision>
+        <topic>FL_foot_contact</topic>
+      </contact>
+    </sensor>
+  </gazebo>
+  <gazebo reference="RR_calf">
+    <sensor name="RR_foot_contact" type="contact">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <!-- Gazebo Classic only (libunitreeFootContactPlugin.so). The <sensor type="contact">
+           itself is native to gz sim and publishes on gz transport without this plugin. -->
+      <!-- <plugin filename="libunitreeFootContactPlugin.so" name="contactPlugin"/> -->
+      <contact>
+        <collision>RR_calf_fixed_joint_lump__RR_foot_collision_1</collision>
+        <topic>RR_foot_contact</topic>
+      </contact>
+    </sensor>
+  </gazebo>
+  <gazebo reference="RL_calf">
+    <sensor name="RL_foot_contact" type="contact">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <!-- Gazebo Classic only (libunitreeFootContactPlugin.so). The <sensor type="contact">
+           itself is native to gz sim and publishes on gz transport without this plugin. -->
+      <!-- <plugin filename="libunitreeFootContactPlugin.so" name="contactPlugin"/> -->
+      <contact>
+        <collision>RL_calf_fixed_joint_lump__RL_foot_collision_1</collision>
+        <topic>RL_foot_contact</topic>
+      </contact>
+    </sensor>
+  </gazebo>
+  <!-- Visualization of Foot contacts. Gazebo Classic only (libunitreeDrawForcePlugin.so);
+       also invalid SDF placement (<plugin> under <visual>), no gz sim equivalent. -->
+  <!-- <gazebo reference="FR_foot">
+    <visual>
+      <plugin filename="libunitreeDrawForcePlugin.so" name="drawForcePlugin">
+        <topicName>FR_foot_contact</topicName>
+      </plugin>
+    </visual>
+  </gazebo> -->
+  <!-- <gazebo reference="FL_foot">
+    <visual>
+      <plugin filename="libunitreeDrawForcePlugin.so" name="drawForcePlugin">
+        <topicName>FL_foot_contact</topicName>
+      </plugin>
+    </visual>
+  </gazebo> -->
+  <!-- <gazebo reference="RR_foot">
+    <visual>
+      <plugin filename="libunitreeDrawForcePlugin.so" name="drawForcePlugin">
+        <topicName>RR_foot_contact</topicName>
+      </plugin>
+    </visual>
+  </gazebo> -->
+  <!-- <gazebo reference="RL_foot">
+    <visual>
+      <plugin filename="libunitreeDrawForcePlugin.so" name="drawForcePlugin">
+        <topicName>RL_foot_contact</topicName>
+      </plugin>
+    </visual>
+  </gazebo> -->
+
+</robot>
