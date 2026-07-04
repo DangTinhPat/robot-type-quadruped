@@ -19,7 +19,6 @@
   <exec_depend>gz_ros2_control</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
-  <exec_depend>position_controllers</exec_depend>
   <exec_depend>imu_sensor_broadcaster</exec_depend>
   <exec_depend>leg_pd_controller</exec_depend>
   <exec_depend>unitree_guide_controller</exec_depend>

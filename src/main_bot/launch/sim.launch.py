@@ -1,4 +1,17 @@
-"""Spawn the go1 robot (description/robot.urdf.xacro) into Gazebo Sim (gz sim)."""
+"""Spawn the go1 robot (description/robot.urdf.xacro) into Gazebo Sim (gz sim)
+with the real gait controller stack (leg_pd_controller + unitree_guide_controller)
+active, and optionally an RViz view of the same live simulation alongside it.
+
+Formerly split across sim.launch.py (position_controller stand-only demo) and
+walk.launch.py (the real gait stack) - merged into one file since walking is a
+strict superset of standing and juggling two near-identical launch files for
+"can it stand" vs "can it walk" stopped being useful once walking worked.
+
+Does not command any pose itself - after the controllers activate, the robot
+sits in its default FSM state until driven via `ros2 run unitree_guide_controller
+keyboard_input` (interactive), the GUI's movement panel, or by publishing
+unitree_guide_controller/msg/Inputs on /control_input directly.
+"""
 
 import os
 
@@ -6,24 +19,16 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    ExecuteProcess,
     IncludeLaunchDescription,
     RegisterEventHandler,
     UnsetEnvironmentVariable,
 )
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-
-# Standing pose for the 12 leg joints (hip, thigh, calf per leg), computed from
-# the 2-link leg geometry (thigh = calf = 0.213m) for a 0.30m standing height:
-# thigh_angle = arccos(H / 2L), calf_angle = -2*thigh_angle. See go1.xacro's
-# <ros2_control> block, which uses the same numbers as spawn-time initial values.
-_STAND_POSE = [0.0, 0.789465, -1.578930] * 4  # FR, FL, RR, RL - matches
-# the joint order in config/go1_controllers.yaml's position_controller.joints
-
 
 # Snap-confined apps (e.g. VS Code installed as a snap) leak SNAP_*/GTK_*/
 # XDG_DATA_* variables into terminals spawned from them. When present, the
@@ -52,6 +57,7 @@ def generate_launch_description():
     default_world = PathJoinSubstitution(
         [pkg_main_bot, 'worlds', 'dog_test_world.sdf']
     )
+    rviz_config = PathJoinSubstitution([pkg_main_bot, 'rviz', 'go1.rviz'])
 
     world = LaunchConfiguration('world')
     robot_name = LaunchConfiguration('robot_name')
@@ -59,6 +65,7 @@ def generate_launch_description():
     y = LaunchConfiguration('y')
     z = LaunchConfiguration('z')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    rviz = LaunchConfiguration('rviz')
 
     declare_world = DeclareLaunchArgument(
         'world', default_value=default_world,
@@ -83,6 +90,14 @@ def generate_launch_description():
     )
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true'
+    )
+    declare_rviz = DeclareLaunchArgument(
+        'rviz', default_value='true',
+        description=(
+            'Also open RViz (showing the live simulation - same /robot_description, '
+            '/tf and /joint_states the real controllers use, not a separate mock). '
+            'Pass rviz:=false to skip it.'
+        )
     )
 
     robot_description = ParameterValue(
@@ -129,6 +144,15 @@ def generate_launch_description():
         }],
     )
 
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        output='screen',
+        arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(rviz),
+    )
+
     # gz_ros2_control's controller_manager lives inside the gz sim process (loaded
     # by the <ros2_control>/<gazebo><plugin> block in go1.xacro); these spawners
     # just activate the controllers it already knows about. `spawner` blocks until
@@ -136,9 +160,11 @@ def generate_launch_description():
     # exit (rather than adding an arbitrary delay) is safe. --switch-timeout is
     # generous because the dog_test_world terrain course (~80 models) makes the
     # controller_manager's update loop slow to respond while the scene is still
-    # loading/rendering - the default 5s switch-controller timeout isn't enough
-    # (confirmed: works fine with a 5s timeout on empty.sdf, times out on the
-    # terrain world).
+    # loading/rendering - the default 5s switch-controller timeout isn't enough.
+    #
+    # Chained: leg_pd_controller must be active before unitree_guide_controller
+    # activates, since the latter claims the former's exported reference interfaces
+    # (command_prefix in go1_controllers.yaml) rather than hardware directly.
     joint_state_broadcaster_spawner = Node(
         package='controller_manager',
         executable='spawner',
@@ -146,32 +172,43 @@ def generate_launch_description():
         arguments=['joint_state_broadcaster', '--switch-timeout', '30'],
     )
 
-    position_controller_spawner = Node(
+    imu_sensor_broadcaster_spawner = Node(
         package='controller_manager',
         executable='spawner',
         output='screen',
-        arguments=['position_controller', '--switch-timeout', '30'],
+        arguments=['imu_sensor_broadcaster', '--switch-timeout', '30'],
     )
 
-    command_stand_pose = ExecuteProcess(
-        cmd=[
-            'ros2', 'topic', 'pub', '--once', '/position_controller/commands',
-            'std_msgs/msg/Float64MultiArray',
-            '{data: ' + str(_STAND_POSE) + '}',
-        ],
+    leg_pd_controller_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
         output='screen',
+        arguments=['leg_pd_controller', '--switch-timeout', '30'],
     )
 
-    spawn_controllers_on_robot_spawned = RegisterEventHandler(
+    unitree_guide_controller_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        output='screen',
+        arguments=['unitree_guide_controller', '--switch-timeout', '30'],
+    )
+
+    spawn_jsb_and_imu_on_robot_spawned = RegisterEventHandler(
         OnProcessExit(
             target_action=spawn_robot,
-            on_exit=[joint_state_broadcaster_spawner, position_controller_spawner],
+            on_exit=[joint_state_broadcaster_spawner, imu_sensor_broadcaster_spawner],
         )
     )
-    command_stand_once_controller_active = RegisterEventHandler(
+    spawn_leg_pd_on_imu_active = RegisterEventHandler(
         OnProcessExit(
-            target_action=position_controller_spawner,
-            on_exit=[command_stand_pose],
+            target_action=imu_sensor_broadcaster_spawner,
+            on_exit=[leg_pd_controller_spawner],
+        )
+    )
+    spawn_guide_on_leg_pd_active = RegisterEventHandler(
+        OnProcessExit(
+            target_action=leg_pd_controller_spawner,
+            on_exit=[unitree_guide_controller_spawner],
         )
     )
 
@@ -184,11 +221,14 @@ def generate_launch_description():
         declare_y,
         declare_z,
         declare_use_sim_time,
+        declare_rviz,
         *unset_snap_vars,
         gz_sim,
         gz_bridge,
         robot_state_publisher,
+        rviz_node,
         spawn_robot,
-        spawn_controllers_on_robot_spawned,
-        command_stand_once_controller_active,
+        spawn_jsb_and_imu_on_robot_spawned,
+        spawn_leg_pd_on_imu_active,
+        spawn_guide_on_leg_pd_active,
     ])

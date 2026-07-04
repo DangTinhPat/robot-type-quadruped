@@ -75,7 +75,7 @@ class SimControlGui:
         self.root.geometry('900x820')
         self.root.minsize(760, 600)
 
-        self.procs = {'sim': None, 'rviz': None, 'walk': None}
+        self.procs = {'sim': None, 'rviz': None}
         self.proc_widgets = {}
         self.move_widgets = []
         # Repeating D-pad movement: root.after() id of the next scheduled publish;
@@ -199,18 +199,20 @@ class SimControlGui:
         ttk.Label(sim_row, text='Sim', style='RowLabel.TLabel', width=6).pack(side='left')
         self._build_process_controls(
             sim_row, key='sim', start_text='▶  Start sim', stop_text='■  Stop sim')
+        ttk.Label(
+            sim_row, foreground=FG_MUTED,
+            text='  (Gazebo, robot đi được thật - dùng MOVEMENT bên dưới)'
+        ).pack(side='left')
 
         rviz_row = ttk.Frame(self.root, padding=(16, 4))
         rviz_row.pack(fill='x')
         ttk.Label(rviz_row, text='RViz', style='RowLabel.TLabel', width=6).pack(side='left')
         self._build_process_controls(
             rviz_row, key='rviz', start_text='▶  Open RViz', stop_text='■  Close RViz')
-
-        walk_row = ttk.Frame(self.root, padding=(16, 4))
-        walk_row.pack(fill='x')
-        ttk.Label(walk_row, text='Walk', style='RowLabel.TLabel', width=6).pack(side='left')
-        self._build_process_controls(
-            walk_row, key='walk', start_text='▶  Start walk', stop_text='■  Stop walk')
+        ttk.Label(
+            rviz_row, foreground=FG_MUTED,
+            text='  (xem riêng, không vật lý - Sim ở trên đã tự mở RViz kèm theo rồi)'
+        ).pack(side='left')
 
         self._build_movement_panel()
         self._build_balance_chart()
@@ -263,12 +265,12 @@ class SimControlGui:
 
     def _build_movement_panel(self):
         move_frame = ttk.LabelFrame(
-            self.root, text='MOVEMENT (needs Walk running)', padding=(14, 10))
+            self.root, text='MOVEMENT (needs Sim running)', padding=(14, 10))
         move_frame.pack(fill='x', padx=16, pady=(6, 6))
 
         # FSM buttons: publish unitree_guide_controller/Inputs 'command' field directly.
         # Stand automates the Passive->FixedDown->FixedStand sequence (2, wait, 2
-        # again) discovered while testing walk.launch.py - the controller needs the
+        # again) discovered while testing the gait controller - it needs the
         # first press to settle before the second one is meaningful.
         fsm_row = ttk.Frame(move_frame)
         fsm_row.pack(fill='x', pady=(0, 8))
@@ -488,7 +490,7 @@ class SimControlGui:
             self._move_after_id = self.root.after(MOVE_TICK_MS, self._move_tick)
 
     def _stop_move_process(self):
-        """Hard/immediate stop, no ramp - used when Walk itself is stopping (no
+        """Hard/immediate stop, no ramp - used when Sim itself is stopping (no
         point easing toward a controller that's going away) or when handing off
         to a different FSM command (send_stop_walking)."""
         if self._move_after_id is not None:
@@ -513,14 +515,17 @@ class SimControlGui:
         label.configure(text='●  ' + text, style=_STATUS_STYLES[kind])
 
     def _command_for(self, key):
-        if key in ('sim', 'walk'):
-            launch_file = 'sim.launch.py' if key == 'sim' else 'walk.launch.py'
+        if key == 'sim':
             cmd = [
-                'ros2', 'launch', 'main_bot', launch_file,
+                'ros2', 'launch', 'main_bot', 'sim.launch.py',
                 'robot_name:=' + self.robot_name_var.get(),
                 'x:=' + self.x_var.get(),
                 'y:=' + self.y_var.get(),
                 'z:=' + self.z_var.get(),
+                # sim.launch.py opens its own RViz by default; the GUI keeps a
+                # separate dedicated RViz row/button, so skip the bundled one
+                # here to avoid two RViz windows opening at once.
+                'rviz:=false',
             ]
             world = self.world_var.get().strip()
             if world:
@@ -550,7 +555,7 @@ class SimControlGui:
         widgets['start'].configure(state='disabled')
         widgets['stop'].configure(state='normal')
         self._set_badge(widgets['status'], f'Running (pid {proc.pid})', 'running')
-        if key == 'walk':
+        if key == 'sim':
             self._set_move_controls_enabled(True)
 
         threading.Thread(target=self._read_proc_output, args=(key, proc), daemon=True).start()
@@ -574,7 +579,7 @@ class SimControlGui:
                     widgets['start'].configure(state='normal')
                     widgets['stop'].configure(state='disabled')
                     self._set_badge(widgets['status'], 'Idle', 'idle')
-                    if key == 'walk':
+                    if key == 'sim':
                         self._set_move_controls_enabled(False)
                         self._stop_move_process()
                 elif kind == 'kill_done':
@@ -588,7 +593,7 @@ class SimControlGui:
         if proc is None:
             return
         self._set_badge(self.proc_widgets[key]['status'], 'Stopping...', 'stopping')
-        if key == 'walk':
+        if key == 'sim':
             self._set_move_controls_enabled(False)
             self._stop_move_process()
         pid = proc.pid

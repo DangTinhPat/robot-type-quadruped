@@ -16,22 +16,25 @@ src/
 │   │       ├── body_cameras.xacro
 │   │       └── depth_camera_left.xacro
 │   ├── config/
-│   │   ├── go1_controllers.yaml       Cấu hình đứng (position_controller, 100Hz)
-│   │   ├── go1_controllers_walk.yaml  Cấu hình đi (leg_pd + unitree_guide, 1000Hz)
-│   │   └── gz_bridge.yaml             Danh sách topic bridge gz <-> ROS2
+│   │   ├── go1_controllers.yaml   Cấu hình đi thật (leg_pd + unitree_guide, 1000Hz)
+│   │   └── gz_bridge.yaml         Danh sách topic bridge gz <-> ROS2
 │   ├── launch/
-│   │   ├── sim.launch.py      Spawn robot, đứng 1 tư thế cố định
-│   │   ├── walk.launch.py     Spawn robot với bộ điều khiển đi thật
-│   │   └── rz.launch.py       Xem robot trong RViz (không có vật lý)
+│   │   ├── sim.launch.py      Spawn robot + bộ điều khiển đi thật + RViz (mặc định luôn)
+│   │   └── rz.launch.py       Xem riêng trong RViz, không vật lý (kiểm mesh/khớp)
 │   └── worlds/dog_test_world.sdf   Địa hình test (đá/bậc thang/hố/dốc/sóng/cầu thang)
 │
 ├── gui/                        Bảng điều khiển Tkinter (`ros2 run gui gui`)
+│                               Start/Stop Sim (+RViz kèm theo), Start/Stop RViz riêng,
+│                               nút Đứng lên/Đi/Dừng đi/Nằm + D-pad, biểu đồ cân bằng
+│                               roll/pitch thời gian thực, nút Tắt hết & Thoát.
 │
 ├── unitree_guide_controller/  Bộ điều khiển đi thật (vendor từ legubiao/quadruped_ros2_control)
 │                               FSM + gait + Kalman filter + QP cân bằng + message Inputs + keyboard_input
 │
 └── leg_pd_controller/          Bộ điều khiển PD cấp thấp (vendor, tách riêng vì không phụ thuộc 2 package kia)
 ```
+
+`sim.launch.py` từng tách riêng thành `sim.launch.py` (chỉ đứng, demo) và `walk.launch.py` (đi thật) - đã gộp làm một vì đi thật bao gồm cả đứng, không cần giữ 2 file gần giống nhau. Mặc định mở kèm RViz (xem cùng lúc dữ liệu thật của mô phỏng); dùng `rviz:=false` nếu không muốn mở.
 
 ## Lưu đồ khối - đường đi của lệnh điều khiển (khi đi bộ)
 
@@ -115,14 +118,15 @@ ros2 run gui gui                        # cách dễ nhất - có nút bấm cho
 Hoặc chạy tay từng launch file:
 
 ```bash
-ros2 launch main_bot sim.launch.py      # robot đứng 1 tư thế cố định
-ros2 launch main_bot walk.launch.py     # robot đi được thật
-ros2 launch main_bot rz.launch.py       # xem trong RViz, không vật lý
+ros2 launch main_bot sim.launch.py                # Gazebo (đi được thật) + RViz cùng lúc
+ros2 launch main_bot sim.launch.py rviz:=false     # chỉ Gazebo, không mở RViz
+ros2 launch main_bot sim.launch.py world:=<path>   # đổi world, vd. dog_test_world.sdf
+ros2 launch main_bot rz.launch.py                  # xem riêng trong RViz, không vật lý
 
-ros2 run unitree_guide_controller keyboard_input   # điều khiển bằng bàn phím (cần walk.launch.py đang chạy)
+ros2 run unitree_guide_controller keyboard_input   # điều khiển bằng bàn phím (cần sim.launch.py đang chạy)
 ```
 
-Điều khiển bàn phím / GUI: bấm `2` hai lần để đứng lên (Passive → FixedDown → FixedStand), `4` để chuyển sang đi (Trotting), W/S/A/D di chuyển, J/L xoay.
+Điều khiển bàn phím / GUI: bấm `2` hai lần để đứng lên (Passive → FixedDown → FixedStand), `4` để chuyển sang đi (Trotting), W/S/A/D di chuyển, J/L xoay. GUI có sẵn nút cho từng bước này, cộng biểu đồ roll/pitch thời gian thực để theo dõi khi nào robot sắp mất thăng bằng.
 
 ## Giới hạn đã biết
 
