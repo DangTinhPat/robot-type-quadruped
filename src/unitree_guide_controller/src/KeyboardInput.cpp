@@ -2,12 +2,12 @@
 // Created by biao on 24-9-11.
 //
 
-#include <keyboard_input/KeyboardInput.h>
+#include <unitree_guide_controller/KeyboardInput.h>
 
 KeyboardInput::KeyboardInput() : Node("keyboard_input_node") {
-    publisher_ = create_publisher<control_input_msgs::msg::Inputs>("control_input", 10);
+    publisher_ = create_publisher<unitree_guide_controller::msg::Inputs>("control_input", 10);
     timer_ = create_wall_timer(std::chrono::microseconds(100), std::bind(&KeyboardInput::timer_callback, this));
-    inputs_ = control_input_msgs::msg::Inputs();
+    inputs_ = unitree_guide_controller::msg::Inputs();
 
     tcgetattr(STDIN_FILENO, &old_tio_);
     new_tio_ = old_tio_;

@@ -7,7 +7,7 @@
 #define STATESWINGTEST_H
 #include <unitree_guide_controller/robot/QuadrupedRobot.h>
 
-#include "controller_common/FSM/FSMState.h"
+#include "unitree_guide_controller/FSM/FSMState.h"
 
 
 struct CtrlComponent;

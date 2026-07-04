@@ -139,8 +139,8 @@ namespace unitree_guide_controller
     controller_interface::CallbackReturn UnitreeGuideController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
-        control_input_subscription_ = get_node()->create_subscription<control_input_msgs::msg::Inputs>(
-            "/control_input", 10, [this](const control_input_msgs::msg::Inputs::SharedPtr msg)
+        control_input_subscription_ = get_node()->create_subscription<unitree_guide_controller::msg::Inputs>(
+            "/control_input", 10, [this](const unitree_guide_controller::msg::Inputs::SharedPtr msg)
             {
                 // Handle message
                 ctrl_interfaces_.control_inputs_.command = msg->command;
@@ -159,12 +159,16 @@ namespace unitree_guide_controller
                 ctrl_component_.balance_ctrl_ = std::make_shared<BalanceCtrl>(ctrl_component_.robot_model_);
             });
 
-        // Slower period (was 0.45s) and higher stance ratio (was 0.5) than upstream's
-        // default: more time per step and more of each cycle spent with feet planted
-        // gives the (untuned-for-this-robot) PD/QP gains more margin to react before
-        // the next foot placement - trades a bit of speed for stability, especially
-        // during turns, which is where the default was visibly unstable.
-        ctrl_component_.wave_generator_ = std::make_shared<WaveGenerator>(0.55, 0.55, Vec4(0, 0.5, 0.5, 0));
+        // Upstream defaults (0.45, 0.5). A previous attempt at (0.55, 0.55) - slower
+        // period + higher stance ratio, intended to add stability margin - was
+        // measured to be WORSE: a 20s sustained-forward-walk test (gz ground-truth
+        // pose sampled every 0.1s) showed the robot falling around t=3-4.5s at
+        // (0.55, 0.55) vs t=10-13s at these defaults. Reverted; the PD/QP gains
+        // below are presumably tuned around this specific timing, so changing it
+        // moved the system further from its (already marginal) stable operating
+        // point instead of closer. Root cause of the eventual fall either way is
+        // still open - see project memory.
+        ctrl_component_.wave_generator_ = std::make_shared<WaveGenerator>(0.45, 0.5, Vec4(0, 0.5, 0.5, 0));
 
         return CallbackReturn::SUCCESS;
     }

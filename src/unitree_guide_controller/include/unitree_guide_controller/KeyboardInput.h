@@ -6,7 +6,7 @@
 #ifndef KEYBOARDINPUT_H
 #define KEYBOARDINPUT_H
 #include <rclcpp/rclcpp.hpp>
-#include <control_input_msgs/msg/inputs.hpp>
+#include <unitree_guide_controller/msg/inputs.hpp>
 #include <termios.h>
 
 
@@ -37,8 +37,8 @@ private:
 
     static bool kbhit();
 
-    control_input_msgs::msg::Inputs inputs_;
-    rclcpp::Publisher<control_input_msgs::msg::Inputs>::SharedPtr publisher_;
+    unitree_guide_controller::msg::Inputs inputs_;
+    rclcpp::Publisher<unitree_guide_controller::msg::Inputs>::SharedPtr publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     bool just_published_ = false;

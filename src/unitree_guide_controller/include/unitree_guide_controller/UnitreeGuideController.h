@@ -7,10 +7,10 @@
 
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <controller_common/FSM/FSMState.h>
-#include <controller_common/FSM/StatePassive.h>
-#include <controller_common/FSM/StateFixedDown.h>
-#include <controller_common/common/enumClass.h>
+#include <unitree_guide_controller/FSM/FSMState.h>
+#include <unitree_guide_controller/FSM/StatePassive.h>
+#include <unitree_guide_controller/FSM/StateFixedDown.h>
+#include <unitree_guide_controller/common/enumClass.h>
 
 #include "control/CtrlComponent.h"
 #include "FSM/StateBalanceTest.h"
@@ -95,7 +95,7 @@ namespace unitree_guide_controller {
         double stand_kp_ = 80.0;
         double stand_kd_ = 3.5;
 
-        rclcpp::Subscription<control_input_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
+        rclcpp::Subscription<unitree_guide_controller::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
 
         std::unordered_map<

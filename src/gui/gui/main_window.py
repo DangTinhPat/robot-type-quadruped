@@ -7,19 +7,35 @@ main_bot sim.launch.py` and `rz.launch.py`, watch their log, and clear
 stale gz/ros processes on demand.
 """
 
+import collections
+import math
 import os
 import queue
 import signal
 import subprocess
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import scrolledtext, ttk
 
 import rclpy
-from control_input_msgs.msg import Inputs
+from sensor_msgs.msg import Imu
+from unitree_guide_controller.msg import Inputs
 
 STOP_GRACE_SECONDS = 5
+
+# Balance chart: how much roll/pitch history to keep and how often to sample/
+# redraw it. 10Hz is plenty for a human-readable trend line and cheap to redraw;
+# the IMU itself publishes much faster (1000Hz) but we only need the latest
+# value each tick, not every sample.
+CHART_TICK_MS = 100
+CHART_HISTORY_SECONDS = 20
+CHART_MAX_SAMPLES = CHART_HISTORY_SECONDS * 1000 // CHART_TICK_MS
+# Fixed +/-pi/2 vertical scale (not auto-scaled) - the point of this chart is to
+# see how close roll/pitch are getting to "about to fall over", so the scale
+# should stay consistent rather than rescaling small wobbles to look large.
+CHART_SCALE_RAD = math.pi / 2
 
 # Max |lx/ly/rx| change per movement tick (see _move_tick) - ramps to a full 0.3
 # command over ~6 ticks (600ms at the 100ms tick interval below) instead of
@@ -56,8 +72,8 @@ class SimControlGui:
     def __init__(self, root):
         self.root = root
         self.root.title('main_bot sim control')
-        self.root.geometry('900x680')
-        self.root.minsize(760, 520)
+        self.root.geometry('900x820')
+        self.root.minsize(760, 600)
 
         self.procs = {'sim': None, 'rviz': None, 'walk': None}
         self.proc_widgets = {}
@@ -80,9 +96,24 @@ class SimControlGui:
         self.ros_node = rclpy.create_node('gui_control_panel')
         self.control_input_pub = self.ros_node.create_publisher(Inputs, '/control_input', 10)
 
+        # Balance chart: subscribe to the same /imu bridged topic used elsewhere
+        # (config/gz_bridge.yaml), keep a rolling roll/pitch history, redraw on
+        # a timer. _latest_roll/pitch are updated by the subscription callback;
+        # the chart timer samples them at a fixed rate rather than redrawing on
+        # every single IMU message (which arrives much faster than any human
+        # needs to see it redraw).
+        self.imu_sub = self.ros_node.create_subscription(Imu, '/imu', self._on_imu_msg, 10)
+        self._latest_roll = 0.0
+        self._latest_pitch = 0.0
+        self._chart_buffer = collections.deque(maxlen=CHART_MAX_SAMPLES)
+
         self._build_widgets()
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
-        self.root.after(100, self._poll_log_queue)
+        # IDs of the two recurring after() timers, so _on_close can cancel them
+        # explicitly - otherwise a timer can fire after root.destroy() and Tk
+        # raises "invalid command name ..." trying to run the dead callback.
+        self._poll_log_after_id = self.root.after(100, self._poll_log_queue)
+        self._chart_after_id = self.root.after(CHART_TICK_MS, self._chart_tick)
 
     def _setup_style(self):
         self.root.configure(bg=BG)
@@ -182,6 +213,7 @@ class SimControlGui:
             walk_row, key='walk', start_text='▶  Start walk', stop_text='■  Stop walk')
 
         self._build_movement_panel()
+        self._build_balance_chart()
 
         util_row = ttk.Frame(self.root, padding=(16, 4))
         util_row.pack(fill='x')
@@ -189,6 +221,11 @@ class SimControlGui:
         self.kill_button = ttk.Button(
             util_row, text='Kill gz/ros traces', style='Kill.TButton', command=self.kill_traces)
         self.kill_button.pack(side='left')
+
+        self.shutdown_button = ttk.Button(
+            util_row, text='⏻  Tắt hết & Thoát', style='Stop.TButton',
+            command=self.shutdown_everything)
+        self.shutdown_button.pack(side='left', padx=(10, 0))
 
         log_frame = ttk.LabelFrame(self.root, text='LOG', padding=(1, 1))
         log_frame.pack(fill='both', expand=True, padx=16, pady=(6, 16))
@@ -229,7 +266,7 @@ class SimControlGui:
             self.root, text='MOVEMENT (needs Walk running)', padding=(14, 10))
         move_frame.pack(fill='x', padx=16, pady=(6, 6))
 
-        # FSM buttons: publish control_input_msgs/Inputs 'command' field directly.
+        # FSM buttons: publish unitree_guide_controller/Inputs 'command' field directly.
         # Stand automates the Passive->FixedDown->FixedStand sequence (2, wait, 2
         # again) discovered while testing walk.launch.py - the controller needs the
         # first press to settle before the second one is meaningful.
@@ -307,6 +344,95 @@ class SimControlGui:
         state = 'normal' if enabled else 'disabled'
         for widget in self.move_widgets:
             widget.configure(state=state)
+
+    def _build_balance_chart(self):
+        # Plain tk.Canvas, not matplotlib: this machine's apt-installed
+        # matplotlib is broken (compiled against numpy 1.x, a numpy 2.x is
+        # what actually resolves at import time) - a canvas avoids that
+        # entirely and needs no extra dependency.
+        chart_frame = ttk.LabelFrame(
+            self.root, text='CÂN BẰNG - roll/pitch theo thời gian thực (từ /imu)',
+            padding=(14, 10))
+        chart_frame.pack(fill='x', padx=16, pady=(6, 6))
+
+        self.chart_canvas = tk.Canvas(
+            chart_frame, height=140, bg=LOG_BG, highlightthickness=0)
+        self.chart_canvas.pack(fill='x')
+
+        legend = ttk.Frame(chart_frame)
+        legend.pack(fill='x', pady=(4, 0))
+        ttk.Label(legend, text='● roll', foreground=self._CHART_ROLL_COLOR).pack(side='left')
+        ttk.Label(legend, text='   ● pitch', foreground=self._CHART_PITCH_COLOR).pack(side='left')
+        ttk.Label(
+            legend, foreground=FG_MUTED,
+            text=f'   (thang đo cố định ±{CHART_SCALE_RAD:.2f} rad - gần mép là sắp ngã)'
+        ).pack(side='left')
+
+        self.chart_canvas.bind('<Configure>', lambda _e: self._redraw_chart())
+
+    _CHART_ROLL_COLOR = ACCENT_STOP_HOVER
+    _CHART_PITCH_COLOR = ACCENT_START_HOVER
+    _CHART_GRID_COLOR = '#3c3c3c'
+
+    def _on_imu_msg(self, msg):
+        x, y, z, w = (msg.orientation.x, msg.orientation.y,
+                      msg.orientation.z, msg.orientation.w)
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        self._latest_roll = math.atan2(sinr_cosp, cosr_cosp)
+
+        sinp = 2 * (w * y - z * x)
+        sinp = max(-1.0, min(1.0, sinp))
+        self._latest_pitch = math.asin(sinp)
+
+    def _chart_tick(self):
+        rclpy.spin_once(self.ros_node, timeout_sec=0)
+        self._chart_buffer.append((time.time(), self._latest_roll, self._latest_pitch))
+        self._redraw_chart()
+        self._chart_after_id = self.root.after(CHART_TICK_MS, self._chart_tick)
+
+    def _redraw_chart(self):
+        canvas = self.chart_canvas
+        canvas.delete('all')
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 1:
+            return
+
+        mid_y = height / 2
+
+        def value_to_y(value):
+            return mid_y - (value / CHART_SCALE_RAD) * mid_y
+
+        # Gridlines at 0 and +/-CHART_SCALE_RAD (canvas edges).
+        canvas.create_line(0, mid_y, width, mid_y, fill=self._CHART_GRID_COLOR)
+        canvas.create_text(
+            4, mid_y, text='0', fill=FG_MUTED, anchor='w', font=('TkDefaultFont', 8))
+        canvas.create_text(
+            4, 8, text=f'+{CHART_SCALE_RAD:.1f}', fill=FG_MUTED, anchor='w',
+            font=('TkDefaultFont', 8))
+        canvas.create_text(
+            4, height - 8, text=f'-{CHART_SCALE_RAD:.1f}', fill=FG_MUTED, anchor='w',
+            font=('TkDefaultFont', 8))
+
+        if len(self._chart_buffer) < 2:
+            return
+
+        t_newest = self._chart_buffer[-1][0]
+        t_oldest = t_newest - CHART_HISTORY_SECONDS
+
+        def time_to_x(t):
+            return width * (t - t_oldest) / (t_newest - t_oldest) if t_newest > t_oldest else width
+
+        roll_points = []
+        pitch_points = []
+        for t, roll, pitch in self._chart_buffer:
+            x = time_to_x(t)
+            roll_points.extend((x, value_to_y(max(-CHART_SCALE_RAD, min(CHART_SCALE_RAD, roll)))))
+            pitch_points.extend((x, value_to_y(max(-CHART_SCALE_RAD, min(CHART_SCALE_RAD, pitch)))))
+
+        canvas.create_line(*roll_points, fill=self._CHART_ROLL_COLOR, width=2)
+        canvas.create_line(*pitch_points, fill=self._CHART_PITCH_COLOR, width=2)
 
     def send_stand(self):
         self._publish_control_input(command=2)
@@ -455,7 +581,7 @@ class SimControlGui:
                     self.kill_button.configure(state='normal')
         except queue.Empty:
             pass
-        self.root.after(100, self._poll_log_queue)
+        self._poll_log_after_id = self.root.after(100, self._poll_log_queue)
 
     def stop_process(self, key):
         proc = self.procs[key]
@@ -497,11 +623,37 @@ class SimControlGui:
             self.log_queue.put(('log', None, f'Failed to run kill_gz.sh: {exc}\n'))
         self.log_queue.put(('kill_done', None, None))
 
+    def shutdown_everything(self):
+        """One-click full shutdown: stop every running launch, sweep any stray
+        gz/ros processes with kill_gz.sh, then close the app - so quitting
+        never requires switching to the terminal the GUI was started from."""
+        self.shutdown_button.configure(state='disabled', text='Đang tắt...')
+        self.kill_button.configure(state='disabled')
+        self._stop_move_process()
+        for proc in self.procs.values():
+            if proc is not None:
+                self._send_signal_to_group(proc.pid, signal.SIGINT)
+        self.root.after(STOP_GRACE_SECONDS * 1000, self._finish_shutdown)
+
+    def _finish_shutdown(self):
+        try:
+            subprocess.run(
+                ['ros2', 'run', 'main_bot', 'kill_gz.sh'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        self._on_close()
+
     def _on_close(self):
         self._stop_move_process()
         for proc in self.procs.values():
             if proc is not None:
                 self._send_signal_to_group(proc.pid, signal.SIGINT)
+        # Cancel the two recurring timers explicitly - otherwise one can fire
+        # after root.destroy() below and Tk raises "invalid command name ..."
+        # trying to run a callback tied to a now-dead widget.
+        self.root.after_cancel(self._poll_log_after_id)
+        self.root.after_cancel(self._chart_after_id)
         self.ros_node.destroy_node()
         rclpy.shutdown()
         self.root.destroy()

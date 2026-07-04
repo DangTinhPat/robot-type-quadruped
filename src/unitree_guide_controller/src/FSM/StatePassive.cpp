@@ -2,7 +2,7 @@
 // Created by tlab-uav on 25-2-27.
 //
 
-#include "controller_common/FSM/StatePassive.h"
+#include "unitree_guide_controller/FSM/StatePassive.h"
 
 StatePassive::StatePassive(CtrlInterfaces& ctrl_interfaces) : FSMState(
     FSMStateName::PASSIVE, "passive", ctrl_interfaces)

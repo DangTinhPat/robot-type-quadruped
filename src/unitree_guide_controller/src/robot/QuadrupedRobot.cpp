@@ -3,7 +3,7 @@
 //
 
 #include <iostream>
-#include "controller_common/CtrlInterfaces.h"
+#include "unitree_guide_controller/CtrlInterfaces.h"
 #include "unitree_guide_controller/robot/QuadrupedRobot.h"
 
 QuadrupedRobot::QuadrupedRobot(CtrlInterfaces &ctrl_interfaces, const std::string &robot_description,

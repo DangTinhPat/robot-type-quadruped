@@ -8,7 +8,7 @@
 #include <vector>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
-#include <control_input_msgs/msg/inputs.hpp>
+#include <unitree_guide_controller/msg/inputs.hpp>
 
 struct CtrlInterfaces
 {
@@ -41,7 +41,7 @@ struct CtrlInterfaces
     odom_state_interface_;
 
 
-    control_input_msgs::msg::Inputs control_inputs_;
+    unitree_guide_controller::msg::Inputs control_inputs_;
     int frequency_{};
 
     CtrlInterfaces() = default;

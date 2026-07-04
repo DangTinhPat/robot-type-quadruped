@@ -6,7 +6,7 @@
 #define STATETROTTING_H
 #include <unitree_guide_controller/control/BalanceCtrl.h>
 #include <unitree_guide_controller/gait/GaitGenerator.h>
-#include "controller_common/FSM/FSMState.h"
+#include "unitree_guide_controller/FSM/FSMState.h"
 
 class StateTrotting final : public FSMState {
 public:

@@ -7,7 +7,7 @@
 
 #include <unitree_guide_controller/common/mathTypes.h>
 
-#include "controller_common/FSM/FSMState.h"
+#include "unitree_guide_controller/FSM/FSMState.h"
 
 
 class WaveGenerator;
