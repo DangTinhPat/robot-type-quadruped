@@ -16,7 +16,18 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import scrolledtext, ttk
 
+import rclpy
+from control_input_msgs.msg import Inputs
+
 STOP_GRACE_SECONDS = 5
+
+# Max |lx/ly/rx| change per movement tick (see _move_tick) - ramps to a full 0.3
+# command over ~6 ticks (600ms at the 100ms tick interval below) instead of
+# jumping there instantly. Added because instant step changes in commanded
+# velocity/turn rate were visibly destabilizing the (untuned) gait controller,
+# especially when rotating - the robot would lurch and sometimes fall.
+MOVE_RAMP_STEP = 0.05
+MOVE_TICK_MS = 100
 
 BG = '#1e1e1e'
 BG_PANEL = '#2d2d2d'
@@ -48,9 +59,26 @@ class SimControlGui:
         self.root.geometry('900x680')
         self.root.minsize(760, 520)
 
-        self.procs = {'sim': None, 'rviz': None}
+        self.procs = {'sim': None, 'rviz': None, 'walk': None}
         self.proc_widgets = {}
+        self.move_widgets = []
+        # Repeating D-pad movement: root.after() id of the next scheduled publish;
+        # _target_* is what the current button click asked for, _cur_* is what's
+        # actually being published this tick (ramped toward the target - see
+        # _move_tick/MOVE_RAMP_STEP). None = not currently ticking.
+        self._move_after_id = None
+        self._move_target_lx = self._move_target_ly = self._move_target_rx = 0.0
+        self._move_cur_lx = self._move_cur_ly = self._move_cur_rx = 0.0
         self.log_queue = queue.Queue()
+
+        # A persistent rclpy node/publisher, created once and reused for every
+        # FSM/movement command. Earlier version spawned a fresh `ros2 topic pub`
+        # subprocess per click, which pays rclpy-interpreter-startup + DDS
+        # discovery cost (can be 1s+) every single time - visibly laggy. publish()
+        # on an already-discovered publisher is near-instant.
+        rclpy.init()
+        self.ros_node = rclpy.create_node('gui_control_panel')
+        self.control_input_pub = self.ros_node.create_publisher(Inputs, '/control_input', 10)
 
         self._build_widgets()
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
@@ -120,7 +148,7 @@ class SimControlGui:
         self.robot_name_var = tk.StringVar(value='go1')
         self.x_var = tk.StringVar(value='0.0')
         self.y_var = tk.StringVar(value='0.0')
-        self.z_var = tk.StringVar(value='0.4')
+        self.z_var = tk.StringVar(value='0.32')
 
         fields = [
             ('World (blank = default)', self.world_var, 16),
@@ -146,6 +174,14 @@ class SimControlGui:
         ttk.Label(rviz_row, text='RViz', style='RowLabel.TLabel', width=6).pack(side='left')
         self._build_process_controls(
             rviz_row, key='rviz', start_text='▶  Open RViz', stop_text='■  Close RViz')
+
+        walk_row = ttk.Frame(self.root, padding=(16, 4))
+        walk_row.pack(fill='x')
+        ttk.Label(walk_row, text='Walk', style='RowLabel.TLabel', width=6).pack(side='left')
+        self._build_process_controls(
+            walk_row, key='walk', start_text='▶  Start walk', stop_text='■  Stop walk')
+
+        self._build_movement_panel()
 
         util_row = ttk.Frame(self.root, padding=(16, 4))
         util_row.pack(fill='x')
@@ -188,6 +224,153 @@ class SimControlGui:
         self.proc_widgets[key] = {'start': start_button, 'stop': stop_button, 'status': status_label}
         self._set_badge(status_label, 'Idle', 'idle')
 
+    def _build_movement_panel(self):
+        move_frame = ttk.LabelFrame(
+            self.root, text='MOVEMENT (needs Walk running)', padding=(14, 10))
+        move_frame.pack(fill='x', padx=16, pady=(6, 6))
+
+        # FSM buttons: publish control_input_msgs/Inputs 'command' field directly.
+        # Stand automates the Passive->FixedDown->FixedStand sequence (2, wait, 2
+        # again) discovered while testing walk.launch.py - the controller needs the
+        # first press to settle before the second one is meaningful.
+        fsm_row = ttk.Frame(move_frame)
+        fsm_row.pack(fill='x', pady=(0, 8))
+        stand_button = ttk.Button(fsm_row, text='Đứng lên', command=self.send_stand)
+        stand_button.pack(side='left')
+        trot_button = ttk.Button(
+            fsm_row, text='Đi (trot)',
+            command=lambda: self._publish_control_input(command=4))
+        trot_button.pack(side='left', padx=(8, 0))
+        # Trotting -> FixedStand is command=2 from that state (verified from
+        # StateTrotting::checkChange source) - actually stops the gait and settles
+        # back into a stable stand, unlike the D-pad's Dừng which only zeroes
+        # velocity and leaves the robot trotting in place.
+        stop_walk_button = ttk.Button(
+            fsm_row, text='Dừng đi (đứng lại)', command=self.send_stop_walking)
+        stop_walk_button.pack(side='left', padx=(8, 0))
+        passive_button = ttk.Button(
+            fsm_row, text='Nằm',
+            command=lambda: self._publish_control_input(command=1))
+        passive_button.pack(side='left', padx=(8, 0))
+
+        # D-pad: click a direction to start publishing that Inputs command on a
+        # repeating root.after() timer (~10Hz - a single publish doesn't sustain
+        # motion), click Dừng to stop. Deliberately plain command= callbacks, same
+        # mechanism as the FSM buttons above - an earlier version used
+        # <ButtonPress-1>/<ButtonRelease-1> bindings for press-and-hold, which
+        # turned out unreliable on ttk.Button (events silently dropped some
+        # clicks). All 6 directions confirmed against real robot motion (gz
+        # ground-truth pose/yaw delta while clicking each button). lx and rx signs
+        # are both flipped from the naive guess because StateTrotting.cpp negates
+        # both: v_cmd_body_y = -invNormalize(lx, ...) and
+        # d_yaw_cmd_ = -invNormalize(rx, ...) - ly (forward/back) is the only axis
+        # that isn't negated.
+        dpad_row = ttk.Frame(move_frame)
+        dpad_row.pack(fill='x')
+        directions = [
+            ('▲ Tiến', 0.0, 0.3, 0.0),
+            ('▼ Lùi', 0.0, -0.3, 0.0),
+            ('◀ Trái', -0.3, 0.0, 0.0),
+            ('▶ Phải', 0.3, 0.0, 0.0),
+            ('↺ Xoay trái', 0.0, 0.0, -0.3),
+            ('↻ Xoay phải', 0.0, 0.0, 0.3),
+        ]
+        dpad_buttons = []
+        for text, lx, ly, rx in directions:
+            btn = ttk.Button(
+                dpad_row, text=text,
+                command=lambda lx=lx, ly=ly, rx=rx: self._start_move(lx, ly, rx))
+            btn.pack(side='left', padx=(0 if not dpad_buttons else 6, 0))
+            dpad_buttons.append(btn)
+
+        stop_move_button = ttk.Button(dpad_row, text='⏹ Dừng', command=self._stop_move)
+        stop_move_button.pack(side='left', padx=(14, 0))
+        dpad_buttons.append(stop_move_button)
+
+        hint = ttk.Label(
+            move_frame, foreground=FG_MUTED, justify='left',
+            text=(
+                'Bấm một hướng để đi liên tục theo hướng đó, bấm Dừng để ngừng.\n'
+                'Muốn xoay sau khi đã đi thẳng: bấm "Dừng đi (đứng lại)" rồi "Đi '
+                '(trot)" lại trước khi xoay - xoay ngay sau khi đi thẳng (chưa qua '
+                'FixedStand) dễ làm robot ngã, do trạng thái nội bộ bộ điều khiển '
+                'bị lệch (chưa rõ nguyên nhân sâu, xoay từ trạng thái đứng vừa '
+                'trot lại thì luôn ổn định).'
+            ))
+        hint.pack(anchor='w', pady=(6, 0))
+
+        self.move_widgets = [
+            stand_button, trot_button, stop_walk_button, passive_button, *dpad_buttons]
+        self._set_move_controls_enabled(False)
+
+    def _set_move_controls_enabled(self, enabled):
+        state = 'normal' if enabled else 'disabled'
+        for widget in self.move_widgets:
+            widget.configure(state=state)
+
+    def send_stand(self):
+        self._publish_control_input(command=2)
+        self.root.after(2000, lambda: self._publish_control_input(command=2))
+
+    def send_stop_walking(self):
+        self._stop_move_process()
+        self._publish_control_input(command=2, lx=0.0, ly=0.0, rx=0.0, ry=0.0)
+
+    def _publish_control_input(self, command=0, lx=0.0, ly=0.0, rx=0.0, ry=0.0):
+        msg = Inputs()
+        msg.command = command
+        msg.lx = lx
+        msg.ly = ly
+        msg.rx = rx
+        msg.ry = ry
+        self.control_input_pub.publish(msg)
+
+    def _start_move(self, lx, ly, rx):
+        self._move_target_lx, self._move_target_ly, self._move_target_rx = lx, ly, rx
+        self._ensure_move_ticking()
+
+    def _stop_move(self):
+        """D-pad Dừng: ramp smoothly down to zero rather than an instant stop -
+        a sudden full-to-zero step is its own kind of abrupt command."""
+        self._move_target_lx = self._move_target_ly = self._move_target_rx = 0.0
+        self._ensure_move_ticking()
+
+    def _ensure_move_ticking(self):
+        if self._move_after_id is None:
+            self._move_tick()
+
+    @staticmethod
+    def _ramp_toward(current, target):
+        if current < target:
+            return min(current + MOVE_RAMP_STEP, target)
+        if current > target:
+            return max(current - MOVE_RAMP_STEP, target)
+        return current
+
+    def _move_tick(self):
+        self._move_cur_lx = self._ramp_toward(self._move_cur_lx, self._move_target_lx)
+        self._move_cur_ly = self._ramp_toward(self._move_cur_ly, self._move_target_ly)
+        self._move_cur_rx = self._ramp_toward(self._move_cur_rx, self._move_target_rx)
+        self._publish_control_input(
+            command=0, lx=self._move_cur_lx, ly=self._move_cur_ly, rx=self._move_cur_rx)
+
+        at_rest = (self._move_cur_lx, self._move_cur_ly, self._move_cur_rx) == (0.0, 0.0, 0.0)
+        at_target = (self._move_target_lx, self._move_target_ly, self._move_target_rx) == (0.0, 0.0, 0.0)
+        if at_rest and at_target:
+            self._move_after_id = None
+        else:
+            self._move_after_id = self.root.after(MOVE_TICK_MS, self._move_tick)
+
+    def _stop_move_process(self):
+        """Hard/immediate stop, no ramp - used when Walk itself is stopping (no
+        point easing toward a controller that's going away) or when handing off
+        to a different FSM command (send_stop_walking)."""
+        if self._move_after_id is not None:
+            self.root.after_cancel(self._move_after_id)
+            self._move_after_id = None
+        self._move_cur_lx = self._move_cur_ly = self._move_cur_rx = 0.0
+        self._move_target_lx = self._move_target_ly = self._move_target_rx = 0.0
+
     def _block_edit(self, event):
         ctrl_held = bool(event.state & 0x4)
         if ctrl_held and event.keysym.lower() in ('c', 'a'):
@@ -204,9 +387,10 @@ class SimControlGui:
         label.configure(text='●  ' + text, style=_STATUS_STYLES[kind])
 
     def _command_for(self, key):
-        if key == 'sim':
+        if key in ('sim', 'walk'):
+            launch_file = 'sim.launch.py' if key == 'sim' else 'walk.launch.py'
             cmd = [
-                'ros2', 'launch', 'main_bot', 'sim.launch.py',
+                'ros2', 'launch', 'main_bot', launch_file,
                 'robot_name:=' + self.robot_name_var.get(),
                 'x:=' + self.x_var.get(),
                 'y:=' + self.y_var.get(),
@@ -240,6 +424,8 @@ class SimControlGui:
         widgets['start'].configure(state='disabled')
         widgets['stop'].configure(state='normal')
         self._set_badge(widgets['status'], f'Running (pid {proc.pid})', 'running')
+        if key == 'walk':
+            self._set_move_controls_enabled(True)
 
         threading.Thread(target=self._read_proc_output, args=(key, proc), daemon=True).start()
 
@@ -262,6 +448,9 @@ class SimControlGui:
                     widgets['start'].configure(state='normal')
                     widgets['stop'].configure(state='disabled')
                     self._set_badge(widgets['status'], 'Idle', 'idle')
+                    if key == 'walk':
+                        self._set_move_controls_enabled(False)
+                        self._stop_move_process()
                 elif kind == 'kill_done':
                     self.kill_button.configure(state='normal')
         except queue.Empty:
@@ -273,6 +462,9 @@ class SimControlGui:
         if proc is None:
             return
         self._set_badge(self.proc_widgets[key]['status'], 'Stopping...', 'stopping')
+        if key == 'walk':
+            self._set_move_controls_enabled(False)
+            self._stop_move_process()
         pid = proc.pid
         self._send_signal_to_group(pid, signal.SIGINT)
         self.root.after(STOP_GRACE_SECONDS * 1000, lambda: self._escalate_stop(key, pid))
@@ -306,9 +498,12 @@ class SimControlGui:
         self.log_queue.put(('kill_done', None, None))
 
     def _on_close(self):
+        self._stop_move_process()
         for proc in self.procs.values():
             if proc is not None:
                 self._send_signal_to_group(proc.pid, signal.SIGINT)
+        self.ros_node.destroy_node()
+        rclpy.shutdown()
         self.root.destroy()
 
 
