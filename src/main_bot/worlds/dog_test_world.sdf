@@ -13,6 +13,11 @@
       <render_engine>ogre2</render_engine>
     </plugin>
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"></plugin>
+    <!-- Lets an external force be applied to any link via the
+         /world/<world_name>/wrench topic (gz.msgs.EntityWrench) - used to
+         push-test balance robustness (`gz topic -t /world/quadruped_test_lab/wrench
+         -m gz.msgs.EntityWrench -p '...'`), not needed for normal operation. -->
+    <plugin filename="gz-sim-apply-link-wrench-system" name="gz::sim::systems::ApplyLinkWrench"></plugin>
 
     <!-- Soft fill light (stands in for skylights) - the point lights below do
          the actual work of lighting an enclosed room. -->

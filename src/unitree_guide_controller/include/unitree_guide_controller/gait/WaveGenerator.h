@@ -5,15 +5,8 @@
 
 #ifndef WAVEGENERATOR_H
 #define WAVEGENERATOR_H
-#include <chrono>
 #include <unitree_guide_controller/common/enumClass.h>
 #include <unitree_guide_controller/common/mathTypes.h>
-
-inline long long getSystemTime() {
-    const auto now = std::chrono::system_clock::now();
-    const auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-}
 
 class WaveGenerator {
 public:
@@ -21,7 +14,15 @@ public:
 
     ~WaveGenerator() = default;
 
-    void update();
+    /**
+     * Advance the gait clock by dt seconds of *simulation* time (the control
+     * period passed to the controller's update()), not wall-clock time - the
+     * rest of the control stack (Estimator, StateTrotting) assumes a fixed
+     * dt = 1/frequency_ of sim time per cycle, so the gait phase must be
+     * driven by the same clock or it drifts out of sync whenever the
+     * simulation isn't running at exactly real_time_factor 1.0.
+     */
+    void update(double dt);
 
     [[nodiscard]] double get_t_stance() const { return period_ * st_ratio_; }
     [[nodiscard]] double get_t_swing() const { return period_ * (1 - st_ratio_); }
@@ -50,7 +51,7 @@ private:
     VecInt4 switch_status_;
     WaveStatus status_past_;
 
-    long start_t_{};
+    double elapsed_{};
 };
 
 

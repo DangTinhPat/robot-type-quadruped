@@ -25,8 +25,9 @@ src/
 │
 ├── gui/                        Bảng điều khiển Tkinter (`ros2 run gui gui`)
 │                               Start/Stop Sim (+RViz kèm theo), Start/Stop RViz riêng,
-│                               nút Đứng lên/Đi/Dừng đi/Nằm + D-pad, biểu đồ cân bằng
-│                               roll/pitch thời gian thực, nút Tắt hết & Thoát.
+│                               nút Đứng lên/Đi/Dừng đi/Nằm + 2 cần joystick ảo (Di
+│                               chuyển 360 độ + Xoay), biểu đồ cân bằng roll/pitch
+│                               thời gian thực, nút Tắt hết & Thoát.
 │
 ├── unitree_guide_controller/  Bộ điều khiển đi thật (vendor từ legubiao/quadruped_ros2_control)
 │                               FSM + gait + Kalman filter + QP cân bằng + message Inputs + keyboard_input
@@ -41,7 +42,7 @@ src/
 ```
 ┌──────────────────┐      ┌───────────────────────┐
 │  keyboard_input   │      │   GUI (Tkinter)        │
-│  (phím WASD/1-6)  │      │  Đứng lên / Đi / D-pad │
+│  (phím WASD/1-6)  │      │  Đứng lên/Đi + joystick│
 └─────────┬──────────┘      └───────────┬────────────┘
           │                             │
           └──────────────┬──────────────┘
@@ -106,6 +107,8 @@ Gazebo (IMU + 4 foot contact)
 
 Hai đường độc lập nhau: nhánh trái để người dùng/RViz xem dữ liệu qua ROS2 topic thường, nhánh phải là đường bộ điều khiển thật sự dùng để tính toán (nhanh hơn, đồng bộ với chu kỳ điều khiển).
 
+FixedStand (đứng yên) trong sơ đồ trên cũng dùng chung đường `Estimator -> BalanceCtrl` này để chủ động cân bằng, không chỉ giữ góc khớp cố định như trước - xem mục "Cân bằng chủ động khi đứng yên" bên dưới.
+
 ## Cách chạy
 
 ```bash
@@ -126,11 +129,33 @@ ros2 launch main_bot rz.launch.py                  # xem riêng trong RViz, khô
 ros2 run unitree_guide_controller keyboard_input   # điều khiển bằng bàn phím (cần sim.launch.py đang chạy)
 ```
 
-Điều khiển bàn phím / GUI: bấm `2` hai lần để đứng lên (Passive → FixedDown → FixedStand), `4` để chuyển sang đi (Trotting), W/S/A/D di chuyển, J/L xoay. GUI có sẵn nút cho từng bước này, cộng biểu đồ roll/pitch thời gian thực để theo dõi khi nào robot sắp mất thăng bằng.
+Điều khiển bàn phím: bấm `2` hai lần để đứng lên (Passive → FixedDown → FixedStand), `4` để chuyển sang đi (Trotting), W/S/A/D di chuyển, J/L xoay. GUI có sẵn nút cho bước đứng lên/đi/dừng/nằm, cộng 2 cần joystick ảo (kéo-thả, tự bật lại về giữa khi buông) thay cho D-pad cũ: cần "Di chuyển" kéo theo hướng bất kỳ trong vòng tròn 360 độ (đi chéo được, không chỉ 4 hướng rời rạc), cần "Xoay" kéo trái/phải để xoay - càng kéo xa tâm càng nhanh, giống joystick tay cầm game thật. Cộng biểu đồ roll/pitch thời gian thực để theo dõi khi nào robot sắp mất thăng bằng.
 
 ## Giới hạn đã biết
 
-- **Gait chưa ổn định lâu dài**: gain PD và trọng số QP trong `unitree_guide_controller` là giá trị mặc định từ upstream, chưa hiệu chỉnh cho robot này. Đi thẳng liên tục hiện tại sẽ ngã sau khoảng 10-13 giây (đã verify bằng cách đo tư thế thật qua `gz model -p` theo thời gian) - đây là giới hạn thật, chưa có cách khắc phục triệt để, không phải lỗi thao tác.
-- Xoay ngay sau khi vừa đi thẳng dễ ngã hơn xoay từ trạng thái đứng yên - nên dừng hẳn (nút "Dừng đi") rồi đi lại trước khi xoay.
+- **Đã sửa: gait bị ngã sau khi đi thẳng một lúc.** Nguyên nhân là `WaveGenerator` (bộ đếm nhịp gait, quyết định chân nào đang swing/stance) dùng đồng hồ **wall-clock thật** (`std::chrono::system_clock`) thay vì dùng thời gian mô phỏng mà `update(time, period)` đã truyền vào - trong khi toàn bộ phần còn lại (Estimator/Kalman filter, StateTrotting) giả định `dt` cố định = 1/tần_số của thời gian **mô phỏng**. `real_time_factor: 1.0` trong world file chỉ là mục tiêu, không phải cam kết - hễ Gazebo chạy chậm hơn thời gian thực một chút (do tải CPU) là nhịp gait bị lệch dần khỏi các phép tính dựa trên `dt` mô phỏng, lệch tích lũy theo thời gian - khớp chính xác với triệu chứng "đi ổn lúc đầu, ngã sau vài giây". Đã sửa bằng cách cho `WaveGenerator::update()` nhận `dt` (giây mô phỏng) thay vì tự đọc đồng hồ hệ thống (`src/unitree_guide_controller/src/gait/WaveGenerator.cpp`). Verify: đi thẳng liên tục 40s không ngã (trước đây ngã sau 10-13s).
+- **Vẫn còn giới hạn**: chuyển hướng đột ngột khi đang đi (đi thẳng rồi xoay ngay, không dừng hẳn) đã cải thiện rõ (từ ngã gần như ngay lập tức lên ~9s xoay liên tục mới ngã, test bằng giá trị y hệt GUI dùng: ly/rx=0.3 có ramp) nhưng chưa hết hẳn - nên dừng hẳn (nút "Dừng đi") trước khi đổi hướng để an toàn nhất. Đi thẳng một mình hoặc xoay một mình (từ trạng thái đứng yên) đều đã ổn định.
+- **Đã giảm mạnh: robot lắc lư (rung roll/pitch qua lại) và dạt ngang khi đi thẳng.** Đo bằng `gz model -p` khi đi thẳng liên tục phát hiện: dù roll/pitch không đủ lớn để ngã, chúng dao động thật (từng lên tới ±0.4-0.6 rad khi đi thẳng 40s) và thân robot dạt dần sang một bên dù lệnh chỉ đi thẳng (không lệnh rẽ). Nguyên nhân: vùng "tự do" cho vị trí mục tiêu thân robot trong `StateTrotting.cpp` quá rộng (±5cm quanh vị trí thực tế) và giới hạn lực điều chỉnh ngang/dọc quá thấp (3 m/s²) - khi robot lệch đi (do bất đối xứng nhỏ khi tiếp đất, nhiễu số...), bộ điều khiển "buông" theo độ lệch thay vì kéo lại, và khi có kéo lại thì lực bị giới hạn quá sớm. Đã kiểm tra CoM (trọng tâm) thật của robot qua TF - không lệch trục Y đáng kể, nên không phải do khối lượng phân bố lệch. Đã sửa: thu hẹp vùng tự do (0.05m → 0.02m), tăng giới hạn lực điều chỉnh ngang/dọc (3 → 5 m/s²), tăng gain vị trí trục Y riêng (70 → 100). Verify: đi thẳng 40s, roll/pitch/yaw giờ luôn dưới 0.04 rad (trước đó dao động ±0.4-0.6 rad) - hết lắc lư rõ rệt; dạt ngang giảm nhưng chưa hết hẳn (~0.35m sau 40s, trước là ~0.4-0.55m) - vẫn còn dư một phần chưa rõ nguyên nhân sâu (nghi ngờ do bản chất động lực học gait trot, chưa đào sâu thêm).
 - Sensor `depth_camera_left` (trong `sensors/`) tham chiếu 1 link không tồn tại trong `go1.xacro` - kế thừa từ file gốc Unitree, chưa verify hoạt động.
 - Chưa có API dạng `cmd_vel`/nav2 - điều khiển hiện tại qua `/control_input` trực tiếp.
+
+## Cân bằng chủ động khi đứng yên
+
+Trước đây, sau khi đứng lên xong (trạng thái FixedStand), robot chỉ giữ nguyên góc khớp cố định qua PD thường (`BaseFixedStand.cpp`) - hoàn toàn không tham chiếu tư thế thân/IMU, nên chỉ cần một lực đẩy ngang nhỏ là ngã (đúng như phản ánh). Trong khi đó, code đã có sẵn 1 trạng thái FSM khác (`StateBalanceTest`, command=6, trước đây không lộ ra GUI) dùng đúng cơ chế cân bằng chủ động thật: đọc tư thế/vận tốc thân thật (Estimator, fusion IMU+động học chân) rồi tính lực chân tối ưu qua QP (`BalanceCtrl`) - y hệt cơ chế đang dùng khi đi bộ.
+
+Đã đưa cơ chế này vào thẳng `BaseFixedStand` (dùng bởi trạng thái FixedStand/"Đứng lên" - nút người dùng bấm thường xuyên nhất): sau khi hoàn tất chuyển động đứng lên (nội suy góc khớp mượt như cũ, không đổi), thay vì giữ góc khớp cố định mãi mãi, chuyển sang chế độ tính lực chân chủ động (dùng lại đúng gain của `StateBalanceTest`) để phản ứng thật với nhiễu bên ngoài.
+
+Verify bằng cách tạo lực đẩy thật qua plugin `ApplyLinkWrench` của Gazebo (thêm vào `dog_test_world.sdf`, topic `/world/quadruped_test_lab/wrench`):
+- Đẩy 2000N ngang hông (~15 lần trọng lượng robot): chỉ lệch 2.7mm rồi tự ổn định lại đúng vị trí cũ - gần như không cảm nhận được.
+- Đẩy 8000N (~60 lần trọng lượng robot, rất mạnh): bị đẩy lệch hẳn (~1.5m, nghiêng ~68°) nhưng dừng lại và giữ ổn định ở tư thế mới, không đổ sập/lật hẳn.
+
+Nghĩa là các cú đẩy thực tế (nhẹ hơn 2000N nhiều) giờ gần như không làm robot lung lay - đúng vấn đề "chỉ cần 1 lực đẩy nhẹ là ngã" đã báo cáo.
+
+## Tốc độ di chuyển (cần joystick)
+
+GUI trước đây giới hạn cần joystick ở |lx/ly/rx| ≤ 0.3 - trong khi bộ điều khiển thật ra cho phép tới 0.4 m/s tiến/lùi, 0.3 m/s sang ngang, 0.5 rad/s xoay (`v_x_limit_/v_y_limit_/w_yaw_limit_` trong `StateTrotting.cpp`), nghĩa là cần joystick trước đây chỉ dùng ~30% tốc độ tối đa mà bộ điều khiển hỗ trợ. Đã đo thực tế bằng `gz model -p` (không đoán) để tìm giới hạn an toàn thật của từng hướng:
+- **Tiến/lùi**: rất khỏe, ổn định ngay cả ở mức tối đa 1.0 (đi được 36m liên tục không ngã).
+- **Sang ngang (strafe)**: yếu hơn - mức tối đa 1.0 ngã sau ~3-4s, nhưng 0.7 đứng vững hoàn toàn suốt 25s.
+- **Xoay**: gần như không còn dư địa tăng - cả 0.4 và 0.5 đều ngã sau 6-8s xoay liên tục.
+
+Vì 1 cần joystick dùng chung cho cả 2 trục tiến/lùi và sang ngang, giới hạn phải chọn theo hướng yếu hơn (strafe). Đã tăng `MOVE_STICK_MAX` (trong `gui/gui/main_window.py`) từ 0.3 lên **0.7** - nhanh hơn rõ rệt (tốc độ tiến đo qua GUI thật: ~0.32 m/s, gấp đôi trước đây) mà vẫn an toàn ở mọi hướng. `ROTATE_STICK_MAX` giữ nguyên 0.3 vì xoay không còn dư địa an toàn để tăng.

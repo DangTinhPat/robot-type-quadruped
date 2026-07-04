@@ -45,6 +45,25 @@ CHART_SCALE_RAD = math.pi / 2
 MOVE_RAMP_STEP = 0.05
 MOVE_TICK_MS = 100
 
+# Joysticks report a normalized [-1, 1] displacement, scaled by these to the
+# actual |lx/ly/rx| sent on /control_input. The original D-pad buttons (and
+# this constant) used 0.3 for both, which turned out far below what the gait
+# controller can actually sustain - StateTrotting.cpp's invNormalize maps
+# lx/ly/rx through v_x_limit_=+-0.4, v_y_limit_=+-0.3, w_yaw_limit_=+-0.5 m/s
+# (or rad/s), so |lx/ly|=0.3 only reached ~30% of the controller's own
+# configured top speed. Empirically tested via gz ground-truth pose (straight
+# line and strafe, sustained 15-25s+ each) to find real safety margins instead
+# of guessing:
+#   - straight-line forward/back (ly) is very robust: stable even at the full
+#     1.0 (0.4 m/s, matching v_x_limit_) - walked 36m with no instability.
+#   - strafe (lx) is weaker: 1.0 falls by ~t=3-4s, but 0.7 held rock-steady for
+#     a full 25s test (~0.36 m/s) - since one joystick drives both axes, the
+#     weaker (strafe) direction sets the safe ceiling.
+#   - rotation (rx) has almost no headroom above the original 0.3: both 0.4 and
+#     0.5 fell within ~6-8s of sustained turning, so it's left unchanged.
+MOVE_STICK_MAX = 0.7
+ROTATE_STICK_MAX = 0.3
+
 BG = '#1e1e1e'
 BG_PANEL = '#2d2d2d'
 BG_ENTRY = '#3c3c3c'
@@ -67,6 +86,93 @@ _STATUS_STYLES = {
 }
 
 
+class Joystick(tk.Canvas):
+    """A self-centering virtual joystick: click-drag the knob anywhere within
+    the circle (or, for axes='x', anywhere left/right) and it reports a
+    normalized displacement in [-1, 1] per axis; releasing snaps the knob back
+    to center and reports (0, 0). Replaces the old discrete direction buttons
+    with proportional, 360-degree (or single-axis, for rotation) control -
+    drag distance from center sets speed, not just direction.
+    """
+
+    def __init__(self, parent, size=150, on_change=None, on_release=None, axes='xy'):
+        super().__init__(parent, width=size, height=size, bg=BG_PANEL, highlightthickness=0)
+        self._size = size
+        self._center = size / 2
+        self._radius = size / 2 - 12
+        self._knob_radius = size * 0.16
+        self._on_change = on_change
+        self._on_release = on_release
+        self._axes = axes
+        self._dragging = False
+        self._enabled = True
+
+        c, r = self._center, self._radius
+        self._base_circle = self.create_oval(
+            c - r, c - r, c + r, c + r, outline=BORDER, width=2)
+        if axes == 'xy':
+            self.create_line(c - r, c, c + r, c, fill=BORDER)
+            self.create_line(c, c - r, c, c + r, fill=BORDER)
+        else:
+            self.create_line(c - r, c, c + r, c, fill=BORDER)
+        self._knob = self.create_oval(0, 0, 0, 0, fill=ACCENT_START, outline='')
+        self._set_knob_norm(0.0, 0.0)
+
+        self.bind('<Button-1>', self._on_press)
+        self.bind('<B1-Motion>', self._on_drag)
+        self.bind('<ButtonRelease-1>', self._on_release_event)
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        if not enabled:
+            self._dragging = False
+            self._set_knob_norm(0.0, 0.0)
+        self.itemconfigure(
+            self._knob, fill=ACCENT_START if enabled else '#5a5a5a')
+        self.itemconfigure(
+            self._base_circle, outline=BORDER if enabled else '#2a2a2a')
+
+    def _set_knob_norm(self, nx, ny):
+        x = self._center + nx * self._radius
+        y = self._center - ny * self._radius  # canvas y grows downward; up = +ny
+        kr = self._knob_radius
+        self.coords(self._knob, x - kr, y - kr, x + kr, y + kr)
+
+    def _event_to_norm(self, event_x, event_y):
+        dx = event_x - self._center
+        dy = self._center - event_y
+        if self._axes == 'x':
+            dy = 0.0
+        dist = math.hypot(dx, dy)
+        if dist > self._radius:
+            scale = self._radius / dist
+            dx *= scale
+            dy *= scale
+        return dx / self._radius, dy / self._radius
+
+    def _on_press(self, event):
+        if not self._enabled:
+            return
+        self._dragging = True
+        self._on_drag(event)
+
+    def _on_drag(self, event):
+        if not self._enabled or not self._dragging:
+            return
+        nx, ny = self._event_to_norm(event.x, event.y)
+        self._set_knob_norm(nx, ny)
+        if self._on_change:
+            self._on_change(nx, ny)
+
+    def _on_release_event(self, _event):
+        if not self._enabled or not self._dragging:
+            return
+        self._dragging = False
+        self._set_knob_norm(0.0, 0.0)
+        if self._on_release:
+            self._on_release()
+
+
 class SimControlGui:
 
     def __init__(self, root):
@@ -78,10 +184,10 @@ class SimControlGui:
         self.procs = {'sim': None, 'rviz': None}
         self.proc_widgets = {}
         self.move_widgets = []
-        # Repeating D-pad movement: root.after() id of the next scheduled publish;
-        # _target_* is what the current button click asked for, _cur_* is what's
-        # actually being published this tick (ramped toward the target - see
-        # _move_tick/MOVE_RAMP_STEP). None = not currently ticking.
+        # Repeating movement publish: root.after() id of the next scheduled
+        # publish; _target_* is what the joystick is currently asking for,
+        # _cur_* is what's actually being published this tick (ramped toward
+        # the target - see _move_tick/MOVE_RAMP_STEP). None = not currently ticking.
         self._move_after_id = None
         self._move_target_lx = self._move_target_ly = self._move_target_rx = 0.0
         self._move_cur_lx = self._move_cur_ly = self._move_cur_rx = 0.0
@@ -282,8 +388,8 @@ class SimControlGui:
         trot_button.pack(side='left', padx=(8, 0))
         # Trotting -> FixedStand is command=2 from that state (verified from
         # StateTrotting::checkChange source) - actually stops the gait and settles
-        # back into a stable stand, unlike the D-pad's Dừng which only zeroes
-        # velocity and leaves the robot trotting in place.
+        # back into a stable stand, unlike releasing the joystick which only
+        # zeroes velocity and leaves the robot trotting in place.
         stop_walk_button = ttk.Button(
             fsm_row, text='Dừng đi (đứng lại)', command=self.send_stop_walking)
         stop_walk_button.pack(side='left', padx=(8, 0))
@@ -292,44 +398,41 @@ class SimControlGui:
             command=lambda: self._publish_control_input(command=1))
         passive_button.pack(side='left', padx=(8, 0))
 
-        # D-pad: click a direction to start publishing that Inputs command on a
-        # repeating root.after() timer (~10Hz - a single publish doesn't sustain
-        # motion), click Dừng to stop. Deliberately plain command= callbacks, same
-        # mechanism as the FSM buttons above - an earlier version used
-        # <ButtonPress-1>/<ButtonRelease-1> bindings for press-and-hold, which
-        # turned out unreliable on ttk.Button (events silently dropped some
-        # clicks). All 6 directions confirmed against real robot motion (gz
-        # ground-truth pose/yaw delta while clicking each button). lx and rx signs
-        # are both flipped from the naive guess because StateTrotting.cpp negates
-        # both: v_cmd_body_y = -invNormalize(lx, ...) and
-        # d_yaw_cmd_ = -invNormalize(rx, ...) - ly (forward/back) is the only axis
-        # that isn't negated.
-        dpad_row = ttk.Frame(move_frame)
-        dpad_row.pack(fill='x')
-        directions = [
-            ('▲ Tiến', 0.0, 0.3, 0.0),
-            ('▼ Lùi', 0.0, -0.3, 0.0),
-            ('◀ Trái', -0.3, 0.0, 0.0),
-            ('▶ Phải', 0.3, 0.0, 0.0),
-            ('↺ Xoay trái', 0.0, 0.0, -0.3),
-            ('↻ Xoay phải', 0.0, 0.0, 0.3),
-        ]
-        dpad_buttons = []
-        for text, lx, ly, rx in directions:
-            btn = ttk.Button(
-                dpad_row, text=text,
-                command=lambda lx=lx, ly=ly, rx=rx: self._start_move(lx, ly, rx))
-            btn.pack(side='left', padx=(0 if not dpad_buttons else 6, 0))
-            dpad_buttons.append(btn)
+        # Two virtual joysticks (drag-and-release, spring back to center)
+        # replace the old 6-button D-pad: one 360-degree stick for omnidirectional
+        # movement (lx/ly at once, not just 4 discrete directions), one
+        # single-axis stick for rotation - same dual-stick layout as a game
+        # controller (left = move, right = turn). Drag distance from center is
+        # proportional speed, same max magnitude (0.3) the buttons used, fed
+        # through the same ramped _move_tick as before so the anti-abrupt-command
+        # safety behavior is unchanged. Right/up drag maps straight to +lx/+ly
+        # (matching the old '▶ Phải'/'▲ Tiến' button constants, already verified
+        # against real robot motion) - StateTrotting.cpp's internal negation of
+        # lx/rx is upstream of this GUI and doesn't need mirroring here.
+        sticks_row = ttk.Frame(move_frame)
+        sticks_row.pack(fill='x')
 
-        stop_move_button = ttk.Button(dpad_row, text='⏹ Dừng', command=self._stop_move)
-        stop_move_button.pack(side='left', padx=(14, 0))
-        dpad_buttons.append(stop_move_button)
+        move_col = ttk.Frame(sticks_row)
+        move_col.pack(side='left')
+        ttk.Label(move_col, text='Di chuyển', foreground=FG_MUTED).pack()
+        self.move_stick = Joystick(
+            move_col, size=150, axes='xy',
+            on_change=self._on_move_stick, on_release=self._on_move_stick_release)
+        self.move_stick.pack(pady=(4, 0))
+
+        rotate_col = ttk.Frame(sticks_row)
+        rotate_col.pack(side='left', padx=(24, 0))
+        ttk.Label(rotate_col, text='Xoay', foreground=FG_MUTED).pack()
+        self.rotate_stick = Joystick(
+            rotate_col, size=110, axes='x',
+            on_change=self._on_rotate_stick, on_release=self._on_rotate_stick_release)
+        self.rotate_stick.pack(pady=(4, 26))
 
         hint = ttk.Label(
             move_frame, foreground=FG_MUTED, justify='left',
             text=(
-                'Bấm một hướng để đi liên tục theo hướng đó, bấm Dừng để ngừng.\n'
+                'Kéo cần "Di chuyển" theo hướng bất kỳ để đi (càng kéo xa càng '
+                'nhanh), kéo cần "Xoay" sang trái/phải để xoay - thả ra là dừng.\n'
                 'Muốn xoay sau khi đã đi thẳng: bấm "Dừng đi (đứng lại)" rồi "Đi '
                 '(trot)" lại trước khi xoay - xoay ngay sau khi đi thẳng (chưa qua '
                 'FixedStand) dễ làm robot ngã, do trạng thái nội bộ bộ điều khiển '
@@ -338,14 +441,34 @@ class SimControlGui:
             ))
         hint.pack(anchor='w', pady=(6, 0))
 
-        self.move_widgets = [
-            stand_button, trot_button, stop_walk_button, passive_button, *dpad_buttons]
+        self.move_widgets = [stand_button, trot_button, stop_walk_button, passive_button]
+        self.move_sticks = [self.move_stick, self.rotate_stick]
         self._set_move_controls_enabled(False)
 
     def _set_move_controls_enabled(self, enabled):
         state = 'normal' if enabled else 'disabled'
         for widget in self.move_widgets:
             widget.configure(state=state)
+        for stick in self.move_sticks:
+            stick.set_enabled(enabled)
+
+    def _on_move_stick(self, nx, ny):
+        self._move_target_lx = nx * MOVE_STICK_MAX
+        self._move_target_ly = ny * MOVE_STICK_MAX
+        self._ensure_move_ticking()
+
+    def _on_move_stick_release(self):
+        self._move_target_lx = 0.0
+        self._move_target_ly = 0.0
+        self._ensure_move_ticking()
+
+    def _on_rotate_stick(self, nx, _ny):
+        self._move_target_rx = nx * ROTATE_STICK_MAX
+        self._ensure_move_ticking()
+
+    def _on_rotate_stick_release(self):
+        self._move_target_rx = 0.0
+        self._ensure_move_ticking()
 
     def _build_balance_chart(self):
         # Plain tk.Canvas, not matplotlib: this machine's apt-installed
@@ -452,16 +575,6 @@ class SimControlGui:
         msg.rx = rx
         msg.ry = ry
         self.control_input_pub.publish(msg)
-
-    def _start_move(self, lx, ly, rx):
-        self._move_target_lx, self._move_target_ly, self._move_target_rx = lx, ly, rx
-        self._ensure_move_ticking()
-
-    def _stop_move(self):
-        """D-pad Dừng: ramp smoothly down to zero rather than an instant stop -
-        a sudden full-to-zero step is its own kind of abrupt command."""
-        self._move_target_lx = self._move_target_ly = self._move_target_rx = 0.0
-        self._ensure_move_ticking()
 
     def _ensure_move_ticking(self):
         if self._move_after_id is None:

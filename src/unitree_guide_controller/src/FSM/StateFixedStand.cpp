@@ -4,10 +4,11 @@
 
 #include "unitree_guide_controller/FSM/StateFixedStand.h"
 
-StateFixedStand::StateFixedStand(CtrlInterfaces &ctrl_interfaces, const std::vector<double> &target_pos,
+StateFixedStand::StateFixedStand(CtrlInterfaces &ctrl_interfaces, CtrlComponent &ctrl_component,
+                                 const std::vector<double> &target_pos,
                                  const double kp,
                                  const double kd)
-    : BaseFixedStand(ctrl_interfaces, target_pos, kp, kd) {
+    : BaseFixedStand(ctrl_interfaces, ctrl_component, target_pos, kp, kd) {
 }
 
 FSMStateName StateFixedStand::checkChange() {

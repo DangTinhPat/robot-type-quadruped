@@ -18,8 +18,11 @@ StateTrotting::StateTrotting(CtrlInterfaces &ctrl_interfaces,
                                                               wave_generator_(ctrl_component.wave_generator_),
                                                               gait_generator_(ctrl_component) {
     gait_height_ = 0.08;
-    Kpp = Vec3(70, 70, 70).asDiagonal();
-    Kdp = Vec3(10, 10, 10).asDiagonal();
+    // Y (lateral) gain raised from the upstream 70/10 - this axis has no
+    // commanded velocity during straight-line walking, so it was the softest
+    // one at rejecting the sideways drift/sway reported during testing.
+    Kpp = Vec3(70, 100, 70).asDiagonal();
+    Kdp = Vec3(10, 15, 10).asDiagonal();
     kp_w_ = 780;
     Kd_w_ = Vec3(70, 70, 70).asDiagonal();
     Kp_swing_ = Vec3(400, 400, 400).asDiagonal();
@@ -105,9 +108,9 @@ void StateTrotting::calcCmd() {
             saturation(vel_target_(1), Vec2(vel_body_(1) - 0.2, vel_body_(1) + 0.2));
 
     pcd_(0) = saturation(pcd_(0) + vel_target_(0) * dt_,
-                         Vec2(pos_body_(0) - 0.05, pos_body_(0) + 0.05));
+                         Vec2(pos_body_(0) - 0.02, pos_body_(0) + 0.02));
     pcd_(1) = saturation(pcd_(1) + vel_target_(1) * dt_,
-                         Vec2(pos_body_(1) - 0.05, pos_body_(1) + 0.05));
+                         Vec2(pos_body_(1) - 0.02, pos_body_(1) + 0.02));
 
     vel_target_(2) = 0;
 
@@ -125,8 +128,8 @@ void StateTrotting::calcTau() {
     Vec3 d_wbd = kp_w_ * rotMatToExp(Rd * G2B_RotMat) +
                  Kd_w_ * (w_cmd_global_ - estimator_->getGyroGlobal());
 
-    dd_pcd(0) = saturation(dd_pcd(0), Vec2(-3, 3));
-    dd_pcd(1) = saturation(dd_pcd(1), Vec2(-3, 3));
+    dd_pcd(0) = saturation(dd_pcd(0), Vec2(-5, 5));
+    dd_pcd(1) = saturation(dd_pcd(1), Vec2(-5, 5));
     dd_pcd(2) = saturation(dd_pcd(2), Vec2(-5, 5));
 
     d_wbd(0) = saturation(d_wbd(0), Vec2(-40, 40));

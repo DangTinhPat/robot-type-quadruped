@@ -71,7 +71,7 @@ namespace unitree_guide_controller
         }
 
         ctrl_component_.robot_model_->update();
-        ctrl_component_.wave_generator_->update();
+        ctrl_component_.wave_generator_->update(period.seconds());
         ctrl_component_.estimator_->update();
 
         if (mode_ == FSMMode::NORMAL)
@@ -209,7 +209,7 @@ namespace unitree_guide_controller
         // Create FSM List
         state_list_.passive = std::make_shared<StatePassive>(ctrl_interfaces_);
         state_list_.fixedDown = std::make_shared<StateFixedDown>(ctrl_interfaces_, down_pos_, stand_kp_, stand_kd_);
-        state_list_.fixedStand = std::make_shared<StateFixedStand>(ctrl_interfaces_, stand_pos_, stand_kp_, stand_kd_);
+        state_list_.fixedStand = std::make_shared<StateFixedStand>(ctrl_interfaces_, ctrl_component_, stand_pos_, stand_kp_, stand_kd_);
         state_list_.swingTest = std::make_shared<StateSwingTest>(ctrl_interfaces_, ctrl_component_);
         state_list_.freeStand = std::make_shared<StateFreeStand>(ctrl_interfaces_, ctrl_component_);
         state_list_.balanceTest = std::make_shared<StateBalanceTest>(ctrl_interfaces_, ctrl_component_);
